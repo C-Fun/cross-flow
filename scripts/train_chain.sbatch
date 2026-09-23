@@ -46,6 +46,10 @@ export MIOPEN_FIND_MODE=2
 export MIOPEN_USER_DB_PATH=/tmp/${USER}/miopen
 export MIOPEN_CUSTOM_CACHE_DIR=/tmp/${USER}/miopen
 mkdir -p /tmp/${USER}/miopen
+# Allocator: avoid HIP OOM from fragmentation (LPIPS diagonal subset + JVP produce
+# varying allocation shapes; we saw 36 GB "reserved but unallocated" at step ~50).
+export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
 cd "${REPO_DIR}"
 
