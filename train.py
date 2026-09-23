@@ -32,6 +32,11 @@ from utils.ema_util import EMA
 from crossflow import CrossFlow
 from evaluate import run_evaluate
 
+# evaluate.py turns on cudnn.benchmark at import time. On ROCm that makes PyTorch
+# request an exhaustive MIOpen kernel search for every new conv shape (minutes per
+# shape, repeated on all 4 ranks), which stalls training. Backend flag only.
+torch.backends.cudnn.benchmark = False
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser()
