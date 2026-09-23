@@ -11,6 +11,7 @@ self-resubmitting Slurm chain knows to stop.
 """
 
 import argparse
+import hashlib
 import os
 import time
 from contextlib import nullcontext
@@ -221,14 +222,8 @@ def main(args):
     # ---------------- wandb (rank 0) ----------------
     use_wandb = (rank == 0) and (not args.no_wandb)
     if use_wandb:
-        wandb_id_file = os.path.join(args.workdir, "wandb_id.txt")
-        if os.path.isfile(wandb_id_file):
-            with open(wandb_id_file) as f:
-                run_id = f.read().strip()
-        else:
-            run_id = wandb.util.generate_id()
-            with open(wandb_id_file, "w") as f:
-                f.write(run_id)
+        # deterministic id derived from workdir so resumed jobs re-attach the run
+        run_id = hashlib.md5(os.path.abspath(args.workdir).encode()).hexdigest()[:16]
         wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
