@@ -1,5 +1,9 @@
-torch
-torchvision
+# --- Install torch + torchvision FIRST, from the ROCm wheel index (NOT plain pip) ---
+# On MI210 / ROCm 7.2, e.g.:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.3
+# Plain `pip install torch` pulls a CUDA build (+cuXXX) that finds no AMD GPU.
+# torch
+# torchvision
 diffusers
 opencv-python
 torch-fidelity>=0.3.0
