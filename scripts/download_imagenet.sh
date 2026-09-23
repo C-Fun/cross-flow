@@ -12,10 +12,10 @@
 set -euo pipefail
 
 # ------------------------- EDIT THESE ----------------------------------------
-REPO_DIR=/Volumes/SSK/github_repos/image_gen/crossflow_torch
-OUT_DIR=/path/to/imagenet/train        # target ImageFolder dir (data_dir for training)
+REPO_DIR=$WORK/cross-flow
+OUT_DIR=$WORK/dataset/imagenet/train        # target ImageFolder dir (data_dir for training)
 MODE=tar                               # "tar" (lossless, needs the tar) or "hf" (token)
-TRAIN_TAR=/path/to/ILSVRC2012_img_train.tar   # only used when MODE=tar
+TRAIN_TAR=$WORK/dataset/imagenet/ILSVRC2012_img_train.tar   # only used when MODE=tar
 # -----------------------------------------------------------------------------
 
 # source /path/to/venv/bin/activate

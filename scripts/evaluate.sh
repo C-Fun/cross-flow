@@ -13,9 +13,9 @@
 set -euo pipefail
 
 # ------------------------- EDIT THESE PATHS ----------------------------------
-REPO_DIR=/Volumes/SSK/github_repos/image_gen/crossflow_torch
-WORKDIR=/path/to/runs/crossflow_B_2/eval
-CKPT=/path/to/runs/crossflow_B_2/latest.pt
+REPO_DIR=$WORK/cross-flow
+WORKDIR=$WORK/cross-flow/runs/crossflow_B_2/eval
+CKPT=$WORK/cross-flow/runs/crossflow_B_2/latest.pt
 MODEL=crossflowDiT_B_2
 NPROC=4
 CFG_OMEGA=1.0

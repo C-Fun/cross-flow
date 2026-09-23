@@ -13,9 +13,9 @@
 set -euo pipefail
 
 # ------------------------- EDIT THESE PATHS ----------------------------------
-REPO_DIR=/Volumes/SSK/github_repos/image_gen/crossflow_torch
-DATA_DIR=/path/to/imagenet/train
-OUTPUT=/path/to/latents.npy
+REPO_DIR=$WORK/cross-flow
+DATA_DIR=$WORK/dataset/imagenet/train
+OUTPUT=$WORK/dataset/imagenet-latents/train/latents.npy
 NPROC=4
 # -----------------------------------------------------------------------------
 
