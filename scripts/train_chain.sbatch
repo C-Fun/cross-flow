@@ -32,11 +32,13 @@ GLOBAL_BATCH_SIZE=256
 TOTAL_STEPS=400000
 NPROC=4
 MAX_RESTARTS=100
+WANDB_PROJECT=crossflow
 # -----------------------------------------------------------------------------
 
 # --- environment: load ROCm + activate your Python env (EDIT for your cluster) ---
 # module load rocm/7.2.0
 # source /path/to/venv/bin/activate
+# export WANDB_API_KEY=<your key>   # required for ONLINE wandb on compute nodes
 export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
 cd "${REPO_DIR}"
 
@@ -69,4 +71,6 @@ torchrun --standalone --nnodes=1 --nproc-per-node="${NPROC}" train.py \
     --workdir "${WORKDIR}" \
     --model "${MODEL}" \
     --global-batch-size "${GLOBAL_BATCH_SIZE}" \
-    --total-steps "${TOTAL_STEPS}"
+    --total-steps "${TOTAL_STEPS}" \
+    --wandb-project "${WANDB_PROJECT}" \
+    --wandb-run-name "$(basename "${WORKDIR}")"

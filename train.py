@@ -18,6 +18,7 @@ from contextlib import nullcontext
 import numpy as np
 import cv2
 import lpips
+import wandb
 
 import torch
 from torch.utils.data import DataLoader
@@ -28,6 +29,7 @@ import utils.torch_util as tu
 from utils.data_util import LatentImageNetDataset
 from utils.ema_util import EMA
 from crossflow import CrossFlow
+from evaluate import run_evaluate
 
 
 def get_args_parser():
@@ -74,6 +76,22 @@ def get_args_parser():
     parser.add_argument("--ckpt-every", type=int, default=5000)
     parser.add_argument("--sample-every", type=int, default=5000)
 
+    # in-loop FID/IS evaluation (small-sample monitoring)
+    parser.add_argument("--eval-every", type=int, default=20000)
+    parser.add_argument("--eval-num-images", type=int, default=10000,
+                        help="Sample count for in-loop FID (must divide num_classes)")
+    parser.add_argument("--eval-gen-bsz", type=int, default=64)
+    parser.add_argument("--eval-cfg-omega", type=float, default=1.0)
+    parser.add_argument("--fid-ref", type=str,
+                        default="https://raw.githubusercontent.com/LTH14/JiT/refs/heads/main/fid_stats/jit_in{IMAGE_SIZE}_stats.npz",
+                        help="Path or URL to FID reference statistics")
+
+    # wandb
+    parser.add_argument("--no-wandb", action="store_true", help="Disable wandb logging")
+    parser.add_argument("--wandb-project", type=str, default="crossflow")
+    parser.add_argument("--wandb-entity", type=str, default=None)
+    parser.add_argument("--wandb-run-name", type=str, default=None)
+
     return parser
 
 
@@ -119,9 +137,26 @@ def save_sample_grid(ema_model, step, workdir, seed=0):
     grid = np.einsum("rnhwc->rhnwc", grid.reshape(num_rows, num_cols, *hwc)).reshape(
         num_rows * hwc[0], num_cols * hwc[1], hwc[2]
     )
-    grid = grid.astype(np.uint8)[:, :, ::-1]
+    grid = grid.astype(np.uint8)  # RGB
     os.makedirs(os.path.join(workdir, "samples"), exist_ok=True)
-    cv2.imwrite(os.path.join(workdir, "samples", f"sample_{step:07d}.png"), grid)
+    cv2.imwrite(os.path.join(workdir, "samples", f"sample_{step:07d}.png"), grid[:, :, ::-1])
+    return grid
+
+
+def run_inloop_eval(ema_model, args, seed):
+    """Small-sample FID/IS from EMA weights. All ranks sample; rank 0 gets values."""
+    tmp_dir = os.path.join(args.workdir, "eval_tmp")
+    fid, inception_score = run_evaluate(
+        ema_model,
+        tmp_dir,
+        fid_ref=args.fid_ref.format(IMAGE_SIZE=ema_model.img_size),
+        num_samples=args.eval_num_images,
+        device_batch_size=args.eval_gen_bsz,
+        initial_seed=seed,
+        keep_samples=False,
+        cfg_omega=args.eval_cfg_omega,
+    )
+    return fid, inception_score
 
 
 def main(args):
@@ -182,6 +217,26 @@ def main(args):
                     state[k] = v.to(device)
         start_step = ckpt["step"]
         dist.print0(f"Resumed at step {start_step}")
+
+    # ---------------- wandb (rank 0) ----------------
+    use_wandb = (rank == 0) and (not args.no_wandb)
+    if use_wandb:
+        wandb_id_file = os.path.join(args.workdir, "wandb_id.txt")
+        if os.path.isfile(wandb_id_file):
+            with open(wandb_id_file) as f:
+                run_id = f.read().strip()
+        else:
+            run_id = wandb.util.generate_id()
+            with open(wandb_id_file, "w") as f:
+                f.write(run_id)
+        wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=args.wandb_run_name,
+            id=run_id,
+            resume="allow",
+            config=vars(args),
+        )
 
     # ---------------- data ----------------
     dataset = LatentImageNetDataset(args.data_dir, args.latents_path, img_size=args.img_size)
@@ -254,12 +309,34 @@ def main(args):
                 f"lpips {running_lpips / n:.4f} | "
                 f"{imgs_per_sec:.1f} img/s"
             )
+            if use_wandb:
+                wandb.log(
+                    {
+                        "loss_cf": running_loss / n,
+                        "lpips": running_lpips / n,
+                        "img_per_sec": imgs_per_sec,
+                        "lr": args.lr,
+                    },
+                    step=step + 1,
+                )
             running_loss = 0.0
             running_lpips = 0.0
             t0 = time.time()
 
         if (step + 1) % args.sample_every == 0 and rank == 0:
-            save_sample_grid(ema.ema_model, step + 1, args.workdir)
+            grid = save_sample_grid(ema.ema_model, step + 1, args.workdir)
+            if use_wandb:
+                wandb.log({"samples": wandb.Image(grid)}, step=step + 1)
+
+        if (step + 1) % args.eval_every == 0:
+            dist.barrier()
+            fid, inception_score = run_inloop_eval(ema.ema_model, args, seed=step + 1)
+            if use_wandb and fid is not None:
+                wandb.log(
+                    {"fid": fid, "inception_score": inception_score}, step=step + 1
+                )
+            model.train()
+            dist.barrier()
 
         if (step + 1) % args.ckpt_every == 0:
             dist.barrier()
@@ -279,6 +356,8 @@ def main(args):
         with open(os.path.join(args.workdir, "DONE"), "w") as f:
             f.write(f"done at step {args.total_steps}\n")
         dist.print0("Training complete; wrote DONE marker.")
+    if use_wandb:
+        wandb.finish()
     dist.barrier()
 
 
