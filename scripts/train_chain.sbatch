@@ -50,9 +50,10 @@ export MIOPEN_USER_DB_PATH=/tmp/${USER}/miopen
 export MIOPEN_CUSTOM_CACHE_DIR=/tmp/${USER}/miopen
 mkdir -p /tmp/${USER}/miopen
 # Allocator: avoid HIP OOM from fragmentation (LPIPS diagonal subset + JVP produce
-# varying allocation shapes; we saw 36 GB "reserved but unallocated" at step ~50).
-export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# varying allocation shapes; we saw ~37 GB "reserved but unallocated" at step ~50).
+# expandable_segments is NOT supported by this ROCm build (torch 2.9.1+rocm6.3), so
+# keep large cached blocks unsplit and reclaim cache proactively instead.
+export PYTORCH_ALLOC_CONF=max_split_size_mb:512,garbage_collection_threshold:0.8
 export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
 cd "${REPO_DIR}"
 
