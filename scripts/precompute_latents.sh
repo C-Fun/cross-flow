@@ -21,6 +21,10 @@ NPROC=4
 
 # module load rocm/7.2.0
 # source /path/to/venv/bin/activate
+# MIOpen kernel-tuning cache on $WORK (shared across resumes; avoids re-tuning each job)
+export MIOPEN_USER_DB_PATH=$WORK/.miopen
+export MIOPEN_CUSTOM_CACHE_DIR=$WORK/.miopen
+mkdir -p $WORK/.miopen
 export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
 cd "${REPO_DIR}"
 
