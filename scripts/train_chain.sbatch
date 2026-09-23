@@ -39,10 +39,13 @@ WANDB_PROJECT=crossflow
 # module load rocm/7.2.0
 # source /path/to/venv/bin/activate
 # export WANDB_API_KEY=<your key>   # required for ONLINE wandb on compute nodes
-# MIOpen kernel-tuning cache on $WORK (shared across resumes; avoids re-tuning each job)
-export MIOPEN_USER_DB_PATH=$WORK/.miopen
-export MIOPEN_CUSTOM_CACHE_DIR=$WORK/.miopen
-mkdir -p $WORK/.miopen
+# MIOpen: skip the slow exhaustive kernel search (FAST mode) and keep the cache
+# on node-local disk. A SQLite db on shared $WORK (Lustre) with 4 ranks searching
+# in parallel makes tuning crawl (the 863-run, 9-dim search).
+export MIOPEN_FIND_MODE=2
+export MIOPEN_USER_DB_PATH=/tmp/${USER}/miopen
+export MIOPEN_CUSTOM_CACHE_DIR=/tmp/${USER}/miopen
+mkdir -p /tmp/${USER}/miopen
 export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
 cd "${REPO_DIR}"
 
