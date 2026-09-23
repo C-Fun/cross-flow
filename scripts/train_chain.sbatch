@@ -35,9 +35,12 @@ MAX_RESTARTS=100
 WANDB_PROJECT=crossflow
 # -----------------------------------------------------------------------------
 
-# --- environment: load ROCm + activate your Python env (EDIT for your cluster) ---
-# module load rocm/7.2.0
-# source /path/to/venv/bin/activate
+# --- environment: activate the Python env explicitly (do NOT rely on the submitting
+# shell's PATH; successors are submitted from inside jobs / non-interactive shells) ---
+set +u  # conda's activation scripts reference unset vars under `set -u`
+source /work1/gouravdatta/fxc293/miniconda3/etc/profile.d/conda.sh
+conda activate crossflow
+set -u
 # export WANDB_API_KEY=<your key>   # required for ONLINE wandb on compute nodes
 # MIOpen: skip the slow exhaustive kernel search (FAST mode) and keep the cache
 # on node-local disk. A SQLite db on shared $WORK (Lustre) with 4 ranks searching
