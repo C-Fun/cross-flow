@@ -87,5 +87,6 @@ torchrun --standalone --nnodes=1 --nproc-per-node="${NPROC}" train.py \
     --model "${MODEL}" \
     --global-batch-size "${GLOBAL_BATCH_SIZE}" \
     --total-steps "${TOTAL_STEPS}" \
+    --dtype bf16 \
     --wandb-project "${WANDB_PROJECT}" \
     --wandb-run-name "$(basename "${WORKDIR}")"
