@@ -51,6 +51,13 @@ scripts/                Slurm launchers (precompute, self-resubmitting train cha
   gradients (`utils/torch_dist_util.py`).
 - Loss recipe: cross-space L2 residual **+ LPIPS** on the `r = t` reconstruction
   anchors (`--lpips-weight`). GAN/adversarial loss is not included.
+- **Adaptive per-sample loss normalization** (`--adaptive-p`, default 1.0,
+  MeanFlow-style `1/sg(||R||^2+c)`): keeps the paper's residual/target but
+  equalizes per-sample gradient magnitude. Without it the `r/t^2` factor makes
+  tiny-`t` reconstruction samples dominate every clipped update and the model
+  collapses to a denoiser that ignores `r` (measured on a 230k-step run: FID ~150,
+  samples unchanged from 50k to 230k). `--time-eps` defaults to 1e-2.
+  `scripts/diag_collapse.py` reproduces the diagnosis on any checkpoint.
 
 ## Usage
 
@@ -86,9 +93,11 @@ python evaluate.py sample --workdir ./vis --ckpt-path /path/latest.pt --model cr
 
 ## Notes / caveats
 
-- **Precision**: default `--dtype fp32` for the JVP forward (safest on ROCm).
-  `--dtype bf16` wraps the forward in autocast for speed but is experimental —
-  forward-mode AD + autocast may not compose on all PyTorch/ROCm versions.
+- **Precision**: use `--dtype bf16` on MI210 (64 GB). fp32 JVP peaks at ~60 GB/GPU
+  at batch 64 and OOMs; bf16 JVP was verified against fp32 (rel. err 1.4%,
+  cosine 0.9999) and finite differences. Also set `cudnn.benchmark=False` (done in
+  `train.py`): on ROCm, benchmark mode triggers an exhaustive MIOpen kernel search
+  per conv shape that can stall for an hour.
 - The FID reference uses the JiT ImageNet-256 stats `.npz` (auto-downloaded).
 - Model sizes: `crossflowDiT_B_2` (default), `_L_2`, `_XL_2`.
 - This is a faithful-in-spirit reproduction; exact paper loss weights, time
