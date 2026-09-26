@@ -26,8 +26,9 @@ class CrossFlow(nn.Module):
         latent_channels: int = 4,
         img_channels: int = 3,
         num_classes: int = 1000,
-        time_eps: float = 1e-4,
+        time_eps: float = 1e-2,
         diagonal_prob: float = 0.5,
+        adaptive_p: float = 1.0,
     ):
         super().__init__()
         self.model_str = model_str
@@ -38,6 +39,7 @@ class CrossFlow(nn.Module):
         self.num_classes = num_classes
         self.time_eps = time_eps
         self.diagonal_prob = diagonal_prob
+        self.adaptive_p = adaptive_p
 
         net_fn = getattr(crossflowDiT, self.model_str)
         self.net: crossflowDiT.crossflowDiT = net_fn(
@@ -88,9 +90,10 @@ class CrossFlow(nn.Module):
             y: Class labels (possibly with CFG null label), shape (B,).
 
         Returns:
-            loss_cf: scalar cross-space residual loss.
+            loss: scalar loss to backprop (adaptively normalized if adaptive_p > 0).
             x_pred: pixel prediction F_theta(z_t, r, y), shape like x0 (keeps grad).
             diagonal: bool mask of r == t samples, shape (B,).
+            loss_cf: raw (un-normalized) mean squared residual, for logging.
         """
         device = z.device
         batch_size = z.shape[0]
@@ -121,8 +124,21 @@ class CrossFlow(nn.Module):
         r_x = broadcast_time(r, x_pred)
         residual = (r_x / t_x.square()) * (x_pred - x0) + (1 - r_x / t_x) * dx_dt
 
-        loss_cf = residual.square().mean()
-        return loss_cf, x_pred, diagonal
+        # per-sample squared residual (mean over pixels)
+        sq = residual.square().flatten(1).mean(1)
+        loss_cf = sq.mean()
+
+        # Adaptive per-sample normalization (MeanFlow-style): w = 1 / sg(||R||^2 + c)^p.
+        # Keeps the paper's residual/target direction but equalizes gradient magnitude
+        # across (t, r). Without it the r/t^2 factor lets tiny-t reconstruction samples
+        # produce gradients 50-5000x larger than the rest, and gradient clipping then
+        # turns every update into "decode a nearly-clean latent" (measured collapse).
+        if self.adaptive_p > 0:
+            w = 1.0 / (sq.detach() + 1e-3).pow(self.adaptive_p)
+            loss = (w * sq).mean()
+        else:
+            loss = loss_cf
+        return loss, x_pred, diagonal, loss_cf
 
     #######################################################
     #                   One-step sampling                 #

@@ -66,9 +66,11 @@ def get_args_parser():
     parser.add_argument("--total-steps", type=int, default=400000)
     parser.add_argument("--p-uncond", type=float, default=0.1,
                         help="CFG label-dropout probability")
-    parser.add_argument("--time-eps", type=float, default=1e-4,
-                        help="Time endpoint clip; raise (e.g. 0.02) if the r/t^2 "
-                             "weight makes early training unstable")
+    parser.add_argument("--time-eps", type=float, default=1e-2,
+                        help="Time endpoint clip for t and r")
+    parser.add_argument("--adaptive-p", type=float, default=1.0,
+                        help="Per-sample adaptive loss normalization power "
+                             "(MeanFlow-style, 1/(||R||^2+c)^p); 0 disables")
     parser.add_argument("--lpips-weight", type=float, default=0.5,
                         help="Weight of the (diagonal) LPIPS perceptual loss")
     parser.add_argument("--lpips-net", type=str, default="vgg", choices=["vgg", "alex"])
@@ -187,6 +189,7 @@ def main(args):
         latent_size=args.img_size // 8,
         num_classes=args.num_classes,
         time_eps=args.time_eps,
+        adaptive_p=args.adaptive_p,
     )
     model = tu.device_put(model)
     model.train()
@@ -280,14 +283,14 @@ def main(args):
 
         opt.zero_grad(set_to_none=True)
         with autocast_ctx:
-            loss_cf, x_pred, diagonal = model.compute_loss(z, x0, y)
+            loss_main, x_pred, diagonal, loss_cf = model.compute_loss(z, x0, y)
 
             lpips_loss = torch.zeros((), device=device)
             if lpips_fn is not None and diagonal.any():
                 lpips_loss = lpips_fn(
                     x_pred[diagonal].float(), x0[diagonal].float()
                 ).mean()
-            loss = loss_cf + args.lpips_weight * lpips_loss
+            loss = loss_main + args.lpips_weight * lpips_loss
 
         loss.backward()
         dist.all_reduce_gradients(model)

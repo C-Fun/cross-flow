@@ -34,13 +34,13 @@ def main():
     y = torch.randint(0, 1000, (bsz,), device=device)
 
     # forward + cross-space JVP loss
-    loss_cf, x_pred, diagonal = model.compute_loss(z, x0, y)
-    print(f"loss_cf={loss_cf.item():.4f}  x_pred={tuple(x_pred.shape)}  "
+    loss, x_pred, diagonal, loss_cf = model.compute_loss(z, x0, y)
+    print(f"loss={loss.item():.4f} (raw loss_cf={loss_cf.item():.4f})  x_pred={tuple(x_pred.shape)}  "
           f"diagonal={diagonal.sum().item()}/{bsz}")
     assert x_pred.shape == x0.shape
 
     # backprop reaches the network params
-    loss_cf.backward()
+    loss.backward()
     grads = [p.grad for p in model.parameters() if p.grad is not None]
     assert len(grads) > 0, "no gradients -- JVP primal did not connect to params!"
     total_norm = torch.sqrt(sum((g.detach() ** 2).sum() for g in grads))

@@ -26,7 +26,7 @@ set -euo pipefail
 REPO_DIR=$WORK/cross-flow/   # this repo on the cluster
 DATA_DIR=$WORK/dataset/imagenet/train/                               # ImageNet train (class subfolders)
 LATENTS_PATH=$WORK/dataset/imagenet-latents/train/latents.npy                              # from preprocess_latents.py
-WORKDIR=$WORK/cross-flow/runs/crossflow_B_2                            # checkpoints/logs/samples
+WORKDIR=$WORK/cross-flow/runs/crossflow_B_2_v2                            # checkpoints/logs/samples
 MODEL=crossflowDiT_B_2
 GLOBAL_BATCH_SIZE=256
 TOTAL_STEPS=400000

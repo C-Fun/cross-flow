@@ -42,7 +42,7 @@ def psnr(a, b):
     return (10 * torch.log10(4.0 / mse)).tolist(), mse.tolist()
 
 
-def residual_loss(model, z, x0, y, t, r, noise, autocast=None):
+def residual_loss(model, z, x0, y, t, r, noise, autocast=None, adaptive=False):
     """Same math as CrossFlow.compute_loss but with explicit (t, r, noise)."""
     ctx = torch.autocast("cuda", dtype=torch.bfloat16) if autocast else torch.autocast("cuda", enabled=False)
     with ctx:
@@ -52,7 +52,10 @@ def residual_loss(model, z, x0, y, t, r, noise, autocast=None):
         dx_dt = dx_dt.detach()
         t_x, r_x = broadcast_time(t, x_pred), broadcast_time(r, x_pred)
         res = (r_x / t_x.square()) * (x_pred - x0) + (1 - r_x / t_x) * dx_dt
-    return res.float().square().mean(), x_pred, dx_dt
+    sq = res.float().square().flatten(1).mean(1)
+    if adaptive:
+        return (sq / (sq.detach() + 1e-3)).mean(), x_pred, dx_dt
+    return sq.mean(), x_pred, dx_dt
 
 
 def grad_norm_of(model, loss):
@@ -149,7 +152,7 @@ def main(a):
         print(f"  |dF/dt| per-pixel rms = {j32.pow(2).mean().sqrt():.4f}  vs |F-x0| rms = {(f(z_t) - x0s).pow(2).mean().sqrt():.4f}")
 
     # ---------------- D. gradient budget by time regime ----------------
-    print("\n[D] pre-clip grad norm by time regime (fp32, batch=8, EMA weights, same noise)")
+    print(f"\n[D] pre-clip grad norm by time regime (fp32, batch=8, EMA weights, same noise, adaptive={a.adaptive})")
     model.train()
     noise = torch.randn_like(z)
     for name, tv, rv in [
@@ -163,7 +166,7 @@ def main(a):
     ]:
         t = torch.full((8,), tv, device=dev)
         r = torch.full((8,), rv, device=dev)
-        loss, _, dxdt = residual_loss(model, z, x0, y, t, r, noise)
+        loss, _, dxdt = residual_loss(model, z, x0, y, t, r, noise, adaptive=a.adaptive)
         g = grad_norm_of(model, loss)
         w = rv / tv ** 2
         print(f"  {name:32s} weight r/t^2={w:9.1f}  loss={loss.item():12.2f}  gradnorm={g:12.2f}  |dF/dt|rms={dxdt.pow(2).mean().sqrt():.3f}")
@@ -185,4 +188,5 @@ if __name__ == "__main__":
     p.add_argument("--model", default="crossflowDiT_B_2")
     p.add_argument("--time-eps", type=float, default=1e-4)
     p.add_argument("--raw", action="store_true", help="use raw model weights instead of EMA")
+    p.add_argument("--adaptive", action="store_true", help="apply MeanFlow-style per-sample normalization in [D]")
     main(p.parse_args())
