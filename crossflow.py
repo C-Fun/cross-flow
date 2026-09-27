@@ -29,6 +29,7 @@ class CrossFlow(nn.Module):
         time_eps: float = 1e-2,
         diagonal_prob: float = 0.5,
         adaptive_p: float = 1.0,
+        out_patch_size: int = None,
     ):
         super().__init__()
         self.model_str = model_str
@@ -42,12 +43,15 @@ class CrossFlow(nn.Module):
         self.adaptive_p = adaptive_p
 
         net_fn = getattr(crossflowDiT, self.model_str)
-        self.net: crossflowDiT.crossflowDiT = net_fn(
+        net_kwargs = dict(
             latent_size=self.latent_size,
             latent_channels=self.latent_channels,
             out_channels=self.img_channels,
             num_classes=self.num_classes,
         )
+        if out_patch_size is not None:  # e.g. 2 for 32px CIFAR with identity latents
+            net_kwargs["out_patch_size"] = out_patch_size
+        self.net: crossflowDiT.crossflowDiT = net_fn(**net_kwargs)
         self.img_size = self.net.pixel_size
 
     #######################################################

@@ -79,6 +79,16 @@ Each job queues its successor before training; a 24h kill auto-resumes from
 `{WORKDIR}/latest.pt`. Training stops (no more resubmits) once
 `{WORKDIR}/DONE` is written at `--total-steps`.
 
+**CIFAR-10/100 pipeline sanity check** (pixel space, identity latents; no VAE,
+no precompute; auto-downloads; FID vs torch-fidelity's `cifar10-train`):
+
+```bash
+DATASET=cifar10 DATA_DIR=$WORK/dataset/cifar WORKDIR=$WORK/cross-flow/runs/cifar10_B_2 \
+TOTAL_STEPS=100000 sbatch --job-name=cf_cifar10 scripts/train_chain.sbatch
+```
+`--dataset cifar10|cifar100` sets 32×32 images, `z = x0` (3×32×32), out-patch 2 and the
+class count automatically; the CrossFlow objective/JVP/sampling code is unchanged.
+
 **3. Evaluate FID/IS**:
 
 ```bash

@@ -23,16 +23,21 @@
 set -euo pipefail
 
 # ------------------------- EDIT THESE PATHS ----------------------------------
-REPO_DIR=$WORK/cross-flow/   # this repo on the cluster
-DATA_DIR=$WORK/dataset/imagenet/train/                               # ImageNet train (class subfolders)
-LATENTS_PATH=$WORK/dataset/imagenet-latents/train/latents.npy                              # from preprocess_latents.py
-WORKDIR=$WORK/cross-flow/runs/crossflow_B_2_v2                            # checkpoints/logs/samples
-MODEL=crossflowDiT_B_2
-GLOBAL_BATCH_SIZE=256
-TOTAL_STEPS=400000
-NPROC=4
-MAX_RESTARTS=100
-WANDB_PROJECT=crossflow
+# Every value can be overridden from the environment at submit time, e.g.
+#   DATASET=cifar10 DATA_DIR=$WORK/dataset/cifar WORKDIR=$WORK/cross-flow/runs/cifar10_B_2 \
+#   TOTAL_STEPS=100000 sbatch --job-name=cf_cifar10 scripts/train_chain.sbatch
+# (sbatch exports the environment to the job, and the job's successor inherits it.)
+REPO_DIR=${REPO_DIR:-$WORK/cross-flow/}                                   # this repo on the cluster
+DATASET=${DATASET:-imagenet}                                               # imagenet | cifar10 | cifar100
+DATA_DIR=${DATA_DIR:-$WORK/dataset/imagenet/train/}                        # ImageNet train dir, or CIFAR root
+LATENTS_PATH=${LATENTS_PATH:-$WORK/dataset/imagenet-latents/train/latents.npy}  # imagenet only
+WORKDIR=${WORKDIR:-$WORK/cross-flow/runs/crossflow_B_2_v2}                 # checkpoints/logs/samples
+MODEL=${MODEL:-crossflowDiT_B_2}
+GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-256}
+TOTAL_STEPS=${TOTAL_STEPS:-400000}
+NPROC=${NPROC:-4}
+MAX_RESTARTS=${MAX_RESTARTS:-100}
+WANDB_PROJECT=${WANDB_PROJECT:-crossflow}
 # -----------------------------------------------------------------------------
 
 # --- environment: activate the Python env explicitly (do NOT rely on the submitting
@@ -54,6 +59,9 @@ mkdir -p /tmp/${USER}/miopen
 # expandable_segments is NOT supported by this ROCm build (torch 2.9.1+rocm6.3), so
 # keep large cached blocks unsplit and reclaim cache proactively instead.
 export PYTORCH_ALLOC_CONF=max_split_size_mb:512,garbage_collection_threshold:0.8
+# keep torch/torch-fidelity downloads (LPIPS weights, CIFAR, FID caches) off the small home quota
+export TORCH_HOME=$WORK/.cache/torch
+mkdir -p "$TORCH_HOME"
 export PYTHONPATH="${REPO_DIR}:${PYTHONPATH:-}"
 cd "${REPO_DIR}"
 
@@ -75,14 +83,18 @@ fi
 echo $((COUNT + 1)) > "${COUNT_FILE}"
 
 # Queue the successor now, so a wall-clock kill still triggers auto-resume.
-sbatch --dependency=afterany:"${SLURM_JOB_ID}" "${REPO_DIR}/scripts/train_chain.sbatch"
+sbatch --job-name="${SLURM_JOB_NAME}" --dependency=afterany:"${SLURM_JOB_ID}" "${REPO_DIR}/scripts/train_chain.sbatch"
 
 echo "=== Job ${SLURM_JOB_ID} (restart ${COUNT}) on $(hostname) ==="
 amd-smi || true
 
+DATASET_ARGS=(--dataset "${DATASET}" --data-dir "${DATA_DIR}")
+if [ "${DATASET}" = "imagenet" ]; then
+    DATASET_ARGS+=(--latents-path "${LATENTS_PATH}")
+fi
+
 torchrun --standalone --nnodes=1 --nproc-per-node="${NPROC}" train.py \
-    --data-dir "${DATA_DIR}" \
-    --latents-path "${LATENTS_PATH}" \
+    "${DATASET_ARGS[@]}" \
     --workdir "${WORKDIR}" \
     --model "${MODEL}" \
     --global-batch-size "${GLOBAL_BATCH_SIZE}" \

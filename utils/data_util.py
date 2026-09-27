@@ -5,7 +5,29 @@ from PIL import Image
 
 import torch
 from torch.utils.data import Dataset
-from torchvision.datasets import ImageFolder
+from torchvision.datasets import ImageFolder, CIFAR10, CIFAR100
+
+
+JIT_FID_REF = "https://raw.githubusercontent.com/LTH14/JiT/refs/heads/main/fid_stats/jit_in{IMAGE_SIZE}_stats.npz"
+
+# Per-dataset defaults. `latent_downsample` is the encoder stride (8 for the SD-VAE,
+# 1 for the identity "encoder" used on CIFAR). The token grid is
+# img_size / latent_downsample / patch_size(=2), and out_patch_size maps that grid
+# back to full pixel resolution (= patch_size * latent_downsample).
+DATASET_CONFIGS = {
+    "imagenet": dict(num_classes=1000, img_size=256, latent_channels=4, latent_downsample=8,
+                     out_patch_size=16, fid_ref=JIT_FID_REF),
+    "cifar10": dict(num_classes=10, img_size=32, latent_channels=3, latent_downsample=1,
+                    out_patch_size=2, fid_ref="cifar10-train"),
+    "cifar100": dict(num_classes=100, img_size=32, latent_channels=3, latent_downsample=1,
+                     out_patch_size=2, fid_ref="cifar100-train"),
+}
+
+
+def build_cifar(name, root, download=False):
+    """torchvision CIFAR train split (PIL images + int labels)."""
+    cls = CIFAR10 if name == "cifar10" else CIFAR100
+    return cls(root, train=True, download=download)
 
 
 def center_crop_arr(pil_image, image_size):
@@ -78,3 +100,28 @@ class LatentImageNetDataset(Dataset):
         x0 = pixel_to_tensor(arr)
         z = torch.from_numpy(self.latents[i, latent_idx].astype(np.float32))
         return x0, z, label
+
+
+class PixelDataset(Dataset):
+    """Pixel-space sanity-check dataset: the "latent" is the image itself.
+
+    Wraps a torchvision (PIL image, label) dataset and returns (x0, z=x0, y), i.e.
+    an identity encoder. The CrossFlow objective then runs unchanged with a
+    pixel-in / pixel-out model, which lets us validate the whole training
+    pipeline on CIFAR before paying for the ImageNet + VAE setting.
+    """
+
+    def __init__(self, base, flip=True):
+        self.base = base
+        self.flip = flip
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, i):
+        img, label = self.base[i]
+        arr = np.array(img.convert("RGB"))
+        if self.flip and (random.random() < 0.5):
+            arr = arr[:, ::-1]
+        x0 = pixel_to_tensor(arr)
+        return x0, x0.clone(), label

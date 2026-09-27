@@ -27,7 +27,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 import utils.torch_dist_util as dist
 import utils.torch_util as tu
-from utils.data_util import LatentImageNetDataset
+from utils.data_util import LatentImageNetDataset, PixelDataset, DATASET_CONFIGS, build_cifar
 from utils.ema_util import EMA
 from crossflow import CrossFlow
 from evaluate import run_evaluate
@@ -42,18 +42,25 @@ def get_args_parser():
     parser = argparse.ArgumentParser()
 
     # data / io
+    parser.add_argument("--dataset", type=str, default="imagenet",
+                        choices=list(DATASET_CONFIGS.keys()),
+                        help="imagenet (SD-VAE latents) or cifar10/cifar100 "
+                             "(pixel-space sanity check with identity latents)")
     parser.add_argument("--data-dir", type=str, required=True,
-                        help="ImageNet train directory (class subfolders)")
-    parser.add_argument("--latents-path", type=str, required=True,
-                        help="Precomputed latents .npy (see preprocess_latents.py)")
+                        help="ImageNet train dir (class subfolders), or CIFAR root "
+                             "(downloaded there if missing)")
+    parser.add_argument("--latents-path", type=str, default=None,
+                        help="Precomputed latents .npy (imagenet only; see preprocess_latents.py)")
     parser.add_argument("--workdir", type=str, required=True,
                         help="Output dir for checkpoints/logs/samples")
-    parser.add_argument("--img-size", type=int, default=256)
+    parser.add_argument("--img-size", type=int, default=None,
+                        help="Defaults to the dataset's native size")
 
     # architecture
     parser.add_argument("--model", type=str, default="crossflowDiT_B_2",
                         choices=["crossflowDiT_B_2", "crossflowDiT_L_2", "crossflowDiT_XL_2"])
-    parser.add_argument("--num-classes", type=int, default=1000)
+    parser.add_argument("--num-classes", type=int, default=None,
+                        help="Defaults to the dataset's class count")
 
     # optimization
     parser.add_argument("--global-batch-size", type=int, default=256)
@@ -90,9 +97,9 @@ def get_args_parser():
                         help="Sample count for in-loop FID (must divide num_classes)")
     parser.add_argument("--eval-gen-bsz", type=int, default=64)
     parser.add_argument("--eval-cfg-omega", type=float, default=1.0)
-    parser.add_argument("--fid-ref", type=str,
-                        default="https://raw.githubusercontent.com/LTH14/JiT/refs/heads/main/fid_stats/jit_in{IMAGE_SIZE}_stats.npz",
-                        help="Path or URL to FID reference statistics")
+    parser.add_argument("--fid-ref", type=str, default=None,
+                        help="FID reference: .npz path/URL or a torch-fidelity registered "
+                             "input (e.g. cifar10-train). Defaults per dataset.")
 
     # wandb
     parser.add_argument("--no-wandb", action="store_true", help="Disable wandb logging")
@@ -129,7 +136,10 @@ def save_checkpoint(path, model, ema, opt, step, args):
 @torch.no_grad()
 def save_sample_grid(ema_model, step, workdir, seed=0):
     """Render a small fixed-class one-step sample grid from the EMA weights."""
-    labels = torch.tensor([207, 360, 387, 974, 88, 979, 417, 279], dtype=torch.int64)
+    if ema_model.num_classes >= 1000:
+        labels = torch.tensor([207, 360, 387, 974, 88, 979, 417, 279], dtype=torch.int64)
+    else:
+        labels = torch.arange(8, dtype=torch.int64) % ema_model.num_classes
     num_rows = 2
     num_cols = len(labels) // num_rows
     imgs = ema_model.generate(
@@ -175,6 +185,14 @@ def main(args):
 
     if rank == 0:
         os.makedirs(args.workdir, exist_ok=True)
+    # resolve dataset-dependent defaults
+    cfg = DATASET_CONFIGS[args.dataset]
+    if args.img_size is None:
+        args.img_size = cfg["img_size"]
+    if args.num_classes is None:
+        args.num_classes = cfg["num_classes"]
+    if args.fid_ref is None:
+        args.fid_ref = cfg["fid_ref"]
     dist.print0("Arguments:\n{}".format(args).replace(", ", ",\n"))
 
     assert args.global_batch_size % world_size == 0, \
@@ -186,10 +204,12 @@ def main(args):
     # ---------------- model / ema / optimizer ----------------
     model = CrossFlow(
         args.model,
-        latent_size=args.img_size // 8,
+        latent_size=args.img_size // cfg["latent_downsample"],
+        latent_channels=cfg["latent_channels"],
         num_classes=args.num_classes,
         time_eps=args.time_eps,
         adaptive_p=args.adaptive_p,
+        out_patch_size=cfg["out_patch_size"],
     )
     model = tu.device_put(model)
     model.train()
@@ -242,7 +262,15 @@ def main(args):
         )
 
     # ---------------- data ----------------
-    dataset = LatentImageNetDataset(args.data_dir, args.latents_path, img_size=args.img_size)
+    if args.dataset == "imagenet":
+        assert args.latents_path, "--latents-path is required for imagenet"
+        dataset = LatentImageNetDataset(args.data_dir, args.latents_path, img_size=args.img_size)
+    else:
+        # rank 0 downloads first so 4 ranks don't race on the archive
+        if rank == 0:
+            build_cifar(args.dataset, args.data_dir, download=True)
+        dist.barrier()
+        dataset = PixelDataset(build_cifar(args.dataset, args.data_dir, download=False))
     sampler = DistributedSampler(
         dataset, num_replicas=world_size, rank=rank, shuffle=True, seed=args.seed,
         drop_last=True,

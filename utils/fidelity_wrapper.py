@@ -310,8 +310,23 @@ def calculate_metrics(**kwargs):
                 )
 
                 ref_path = url_to_path(input2)
-                x = np.load(ref_path)
-                fid_stats_2 = {"mu": x["mu"], "sigma": x["sigma"]}
+                if ref_path.endswith(".npz"):
+                    x = np.load(ref_path)
+                    fid_stats_2 = {"mu": x["mu"], "sigma": x["sigma"]}
+                else:
+                    # registered torch-fidelity input (e.g. 'cifar10-train'):
+                    # compute (and cache) its statistics the standard way.
+                    vprint(verbose, f"Extracting features from input2")
+                    featuresdict_2 = extract_featuresdict_from_input_id_cached(
+                        2, feat_extractor, **kwargs
+                    )
+                    fid_stats_2 = fid_featuresdict_to_statistics_cached(
+                        featuresdict_2,
+                        get_cacheable_input_name(2, **kwargs),
+                        feat_extractor,
+                        feature_layer_fid,
+                        **kwargs,
+                    )
                 metric_fid = fid_statistics_to_metric(
                     fid_stats_1, fid_stats_2, get_kwarg("verbose", kwargs)
                 )

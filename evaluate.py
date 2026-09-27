@@ -15,6 +15,7 @@ import utils.torch_dist_util as dist
 import utils.torch_util as tu
 from utils.fidelity_wrapper import calculate_metrics
 from crossflow import CrossFlow
+from utils.data_util import DATASET_CONFIGS
 
 
 def print0(*args, **kwargs):
@@ -127,8 +128,10 @@ def get_args_parser():
     parser.add_argument("--ckpt-path", type=str, required=True, metavar="PATH")
     parser.add_argument("--model", type=str, default="crossflowDiT_B_2",
                         choices=["crossflowDiT_B_2", "crossflowDiT_L_2", "crossflowDiT_XL_2"])
-    parser.add_argument("--img-size", type=int, default=256)
-    parser.add_argument("--num-classes", type=int, default=1000)
+    parser.add_argument("--dataset", type=str, default="imagenet",
+                        choices=list(DATASET_CONFIGS.keys()))
+    parser.add_argument("--img-size", type=int, default=None)
+    parser.add_argument("--num-classes", type=int, default=None)
     parser.add_argument("--use-model-weights", action="store_true",
                         help="Use raw model weights instead of EMA")
 
@@ -140,9 +143,8 @@ def get_args_parser():
     parser.add_argument("--gen-bsz", type=int, default=64)
     parser.add_argument("--save-samples", action="store_true")
 
-    parser.add_argument("--fid-ref", type=str,
-                        default="https://raw.githubusercontent.com/LTH14/JiT/refs/heads/main/fid_stats/jit_in{IMAGE_SIZE}_stats.npz",
-                        help="Path or URL to FID reference statistics file")
+    parser.add_argument("--fid-ref", type=str, default=None,
+                        help=".npz path/URL or torch-fidelity registered input; defaults per dataset")
 
     return parser
 
@@ -157,10 +159,20 @@ def main(args):
 
     tu.seed(0)
 
+    cfg = DATASET_CONFIGS[args.dataset]
+    if args.img_size is None:
+        args.img_size = cfg["img_size"]
+    if args.num_classes is None:
+        args.num_classes = cfg["num_classes"]
+    if args.fid_ref is None:
+        args.fid_ref = cfg["fid_ref"]
+
     model = CrossFlow(
         args.model,
-        latent_size=args.img_size // 8,
+        latent_size=args.img_size // cfg["latent_downsample"],
+        latent_channels=cfg["latent_channels"],
         num_classes=args.num_classes,
+        out_patch_size=cfg["out_patch_size"],
     )
 
     if not os.path.isfile(args.ckpt_path):
@@ -181,7 +193,10 @@ def main(args):
             cfg_omega=args.cfg_omega,
         )
     elif args.mode == "sample":
-        labels = torch.tensor([207, 360, 387, 974, 88, 979, 417, 279], dtype=torch.int64)
+        if model.num_classes >= 1000:
+            labels = torch.tensor([207, 360, 387, 974, 88, 979, 417, 279], dtype=torch.int64)
+        else:
+            labels = torch.arange(8, dtype=torch.int64) % model.num_classes
         num_rows = 2
         num_cols = len(labels) // num_rows
         indices = torch.arange(labels.shape[0])
