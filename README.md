@@ -79,6 +79,14 @@ Each job queues its successor before training; a 24h kill auto-resumes from
 `{WORKDIR}/latest.pt`. Training stops (no more resubmits) once
 `{WORKDIR}/DONE` is written at `--total-steps`.
 
+**Without Slurm** (shared multi-GPU box, e.g. the lab H200 server):
+
+```bash
+nohup bash scripts/train_local.sh > ~/cf_train_h200.log 2>&1 &   # GPUS/WORKDIR/... via env
+touch $WORKDIR/STOP && pkill -f "train.py --dataset"             # clean stop
+```
+Restart loop resumes from `latest.pt` on crash and exits on `DONE`.
+
 **CIFAR-10/100 pipeline sanity check** (pixel space, identity latents; no VAE,
 no precompute; auto-downloads; FID vs torch-fidelity's `cifar10-train`):
 
