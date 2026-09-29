@@ -7,7 +7,9 @@ import torch
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-torch.backends.cudnn.benchmark = True
+# On ROCm, benchmark mode makes MIOpen run an exhaustive kernel search per conv
+# shape (model + Inception), which can stall for an hour. Backend flag only.
+torch.backends.cudnn.benchmark = False
 
 import cv2
 
