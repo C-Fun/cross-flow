@@ -95,6 +95,10 @@ class count automatically; the CrossFlow objective/JVP/sampling code is unchange
 sbatch scripts/evaluate.sh             # edit CKPT / WORKDIR first
 ```
 
+Each evaluation is logged to wandb as its own run (`job_type=eval`): FID/IS,
+`cfg_omega`, and an `N×N` class-per-row sample grid (`--grid-size 8|16`; small
+images are upscaled for viewing). Disable with `--no-wandb`.
+
 Or a quick visual grid on a single GPU:
 
 ```bash

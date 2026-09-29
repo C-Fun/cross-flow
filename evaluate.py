@@ -12,6 +12,7 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark = False
 
 import cv2
+import wandb
 
 import utils.torch_dist_util as dist
 import utils.torch_util as tu
@@ -111,14 +112,53 @@ def run_evaluate(
 
 
 def load_weights(model, ckpt_path, use_ema=True):
-    """Load either our training checkpoint dict (with 'ema'/'model') or a raw state_dict."""
+    """Load our training checkpoint dict (with 'ema'/'model') or a raw state_dict.
+
+    Returns the training step stored in the checkpoint (None for raw state_dicts).
+    """
     ckpt = torch.load(ckpt_path, map_location="cpu")
+    step = None
     if isinstance(ckpt, dict) and ("ema" in ckpt or "model" in ckpt):
         key = "ema" if (use_ema and "ema" in ckpt) else "model"
-        print0(f"Loading '{key}' weights from checkpoint (step {ckpt.get('step')})")
+        step = ckpt.get("step")
+        print0(f"Loading '{key}' weights from checkpoint (step {step})")
         model.load_state_dict(ckpt[key], strict=False)
     else:
         model.load_state_dict(ckpt, strict=False)
+    return step
+
+
+@torch.no_grad()
+def make_sample_grid(model, grid_size, cfg_omega, seed=0, min_tile=128):
+    """Class-conditional sample grid, one class per row, as an RGB uint8 HWC array.
+
+    Rows use evenly spaced classes (or cycle through them if there are fewer
+    classes than rows). Small images (e.g. 32px CIFAR) are nearest-upscaled so
+    each tile is at least `min_tile` px for viewing.
+    """
+    n = grid_size * grid_size
+    num_classes = model.num_classes
+    if num_classes >= grid_size:
+        row_classes = np.linspace(0, num_classes - 1, grid_size).round().astype(np.int64)
+    else:
+        row_classes = np.arange(grid_size) % num_classes
+    labels = torch.from_numpy(np.repeat(row_classes, grid_size))
+
+    imgs = model.generate(
+        n_sample=n,
+        rng=tu.BatchGenerator(device=dist.local_device(), seeds=torch.arange(n) ^ seed),
+        y=labels,
+        cfg_omega=cfg_omega,
+    )
+    imgs = (tu.device_get(imgs) + 1) / 2
+    imgs = np.round(np.clip(imgs * 255, 0, 255)).astype(np.uint8).transpose(0, 2, 3, 1)
+    h, w, c = imgs.shape[1:]
+    grid = imgs.reshape(grid_size, grid_size, h, w, c).transpose(0, 2, 1, 3, 4)
+    grid = grid.reshape(grid_size * h, grid_size * w, c)
+    scale = max(1, min_tile // h)
+    if scale > 1:
+        grid = grid.repeat(scale, axis=0).repeat(scale, axis=1)
+    return grid, row_classes
 
 
 def get_args_parser():
@@ -147,6 +187,14 @@ def get_args_parser():
 
     parser.add_argument("--fid-ref", type=str, default=None,
                         help=".npz path/URL or torch-fidelity registered input; defaults per dataset")
+
+    # visualization / wandb
+    parser.add_argument("--grid-size", type=int, default=8,
+                        help="Sample grid is grid_size x grid_size (one class per row)")
+    parser.add_argument("--no-wandb", action="store_true", help="Disable wandb logging")
+    parser.add_argument("--wandb-project", type=str, default="crossflow")
+    parser.add_argument("--wandb-entity", type=str, default=None)
+    parser.add_argument("--wandb-run-name", type=str, default=None)
 
     return parser
 
@@ -180,11 +228,23 @@ def main(args):
     if not os.path.isfile(args.ckpt_path):
         print0(f"No checkpoint found at {args.ckpt_path}, exiting.")
         return
-    load_weights(model, args.ckpt_path, use_ema=not args.use_model_weights)
+    step = load_weights(model, args.ckpt_path, use_ema=not args.use_model_weights)
     model = tu.device_put(model)
 
+    use_wandb = (dist.process_index() == 0) and (not args.no_wandb)
+    if use_wandb:
+        run_tag = os.path.basename(os.path.dirname(os.path.abspath(args.ckpt_path)))
+        wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            job_type="eval",
+            name=args.wandb_run_name or f"eval-{run_tag}-step{step}-cfg{args.cfg_omega}",
+            config={**vars(args), "ckpt_step": step},
+        )
+
+    fid, inception_score = None, None
     if args.mode == "evaluate":
-        run_evaluate(
+        fid, inception_score = run_evaluate(
             model,
             args.workdir,
             fid_ref=args.fid_ref.format(IMAGE_SIZE=model.img_size),
@@ -194,34 +254,34 @@ def main(args):
             keep_samples=args.save_samples,
             cfg_omega=args.cfg_omega,
         )
-    elif args.mode == "sample":
-        if model.num_classes >= 1000:
-            labels = torch.tensor([207, 360, 387, 974, 88, 979, 417, 279], dtype=torch.int64)
-        else:
-            labels = torch.arange(8, dtype=torch.int64) % model.num_classes
-        num_rows = 2
-        num_cols = len(labels) // num_rows
-        indices = torch.arange(labels.shape[0])
-        sampled_images = model.generate(
-            n_sample=labels.shape[0],
-            rng=tu.BatchGenerator(device=dist.local_device(), seeds=indices),
-            y=labels,
-            cfg_omega=args.cfg_omega,
-        )
-        sampled_images = tu.device_get(sampled_images)
-        sampled_images = (sampled_images + 1) / 2
-        gen_img = np.round(np.clip(sampled_images * 255, 0, 255)).transpose((0, 2, 3, 1))
 
-        img_shape = gen_img.shape[1:]
-        gen_img = np.einsum("rnhwc->rhnwc", gen_img.reshape(num_rows, num_cols, *img_shape)).reshape(
-            num_rows * img_shape[0], num_cols * img_shape[1], img_shape[2]
+    # Sample grid (both modes), rendered on rank 0 with the same cfg as the eval.
+    if dist.process_index() == 0:
+        grid, row_classes = make_sample_grid(
+            model, args.grid_size, args.cfg_omega, seed=args.sample_seed
         )
-        assert gen_img.shape[-1] == 3, gen_img.shape
+        save_path = os.path.join(
+            args.workdir, f"samples_{args.grid_size}x{args.grid_size}_cfg{args.cfg_omega}.png"
+        )
+        cv2.imwrite(save_path, grid[:, :, ::-1])  # RGB -> BGR for cv2
+        print0(f"Sample grid saved to {save_path} (rows = classes {row_classes.tolist()})")
 
-        gen_img = gen_img.astype(np.uint8)[:, :, ::-1]
-        save_path = os.path.join(args.workdir, "sampled_image.png")
-        cv2.imwrite(save_path, gen_img)
-        print0(f"Sampled image saved to {save_path}")
+        if use_wandb:
+            log = {
+                "cfg_omega": args.cfg_omega,
+                "samples": wandb.Image(
+                    grid,
+                    caption=f"step {step} | cfg {args.cfg_omega} | rows = classes {row_classes.tolist()}",
+                ),
+            }
+            if fid is not None:
+                log.update({"fid": fid, "inception_score": inception_score})
+                wandb.summary["fid"] = fid
+                wandb.summary["inception_score"] = inception_score
+            wandb.log(log, step=step or 0)
+            wandb.finish()
+
+    dist.barrier()
 
 
 if __name__ == "__main__":
