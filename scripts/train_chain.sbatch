@@ -89,9 +89,9 @@ echo "=== Job ${SLURM_JOB_ID} (restart ${COUNT}) on $(hostname) ==="
 amd-smi || true
 
 DATASET_ARGS=(--dataset "${DATASET}" --data-dir "${DATA_DIR}")
-if [ "${DATASET}" = "imagenet" ]; then
-    DATASET_ARGS+=(--latents-path "${LATENTS_PATH}")
-fi
+case "${DATASET}" in
+    imagenet*) DATASET_ARGS+=(--latents-path "${LATENTS_PATH}") ;;   # imagenet | imagenet_vavae
+esac
 
 torchrun --standalone --nnodes=1 --nproc-per-node="${NPROC}" train.py \
     "${DATASET_ARGS[@]}" \

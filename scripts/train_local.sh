@@ -53,9 +53,9 @@ mkdir -p "${TORCH_HOME}" "${WORKDIR}"
 cd "${REPO_DIR}"
 
 DATASET_ARGS=(--dataset "${DATASET}" --data-dir "${DATA_DIR}")
-if [ "${DATASET}" = "imagenet" ]; then
-    DATASET_ARGS+=(--latents-path "${LATENTS_PATH}")
-fi
+case "${DATASET}" in
+    imagenet*) DATASET_ARGS+=(--latents-path "${LATENTS_PATH}") ;;   # imagenet | imagenet_vavae
+esac
 
 echo "=== $(hostname) $(date) | GPUs=${GPUS} (${NPROC}) | workdir=${WORKDIR} ==="
 nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader || true
