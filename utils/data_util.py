@@ -10,17 +10,21 @@ from torchvision.datasets import ImageFolder, CIFAR10, CIFAR100
 
 JIT_FID_REF = "https://raw.githubusercontent.com/LTH14/JiT/refs/heads/main/fid_stats/jit_in{IMAGE_SIZE}_stats.npz"
 
-# Per-dataset defaults. `latent_downsample` is the encoder stride (8 for the SD-VAE,
-# 1 for the identity "encoder" used on CIFAR). The token grid is
-# img_size / latent_downsample / patch_size(=2), and out_patch_size maps that grid
-# back to full pixel resolution (= patch_size * latent_downsample).
+# Per-dataset defaults. `latent_downsample` is the encoder stride (16 for VA-VAE, 8 for
+# the SD-VAE, 1 for the identity "encoder" used on CIFAR). The token grid is
+# img_size / latent_downsample / patch_size, and out_patch_size maps that grid back to
+# full pixel resolution (= patch_size * latent_downsample).
 DATASET_CONFIGS = {
+    # paper default: VA-VAE f16 x 32ch -> 16x16 latent, one token per latent position
+    "imagenet_vavae": dict(num_classes=1000, img_size=256, latent_channels=32, latent_downsample=16,
+                           patch_size=1, out_patch_size=16, fid_ref=JIT_FID_REF, encoder="vavae"),
+    # legacy: SD-VAE f8 x 4ch -> 32x32 latent, patch 2
     "imagenet": dict(num_classes=1000, img_size=256, latent_channels=4, latent_downsample=8,
-                     out_patch_size=16, fid_ref=JIT_FID_REF),
+                     patch_size=2, out_patch_size=16, fid_ref=JIT_FID_REF, encoder="sdvae"),
     "cifar10": dict(num_classes=10, img_size=32, latent_channels=3, latent_downsample=1,
-                    out_patch_size=2, fid_ref="cifar10-train"),
+                    patch_size=2, out_patch_size=2, fid_ref="cifar10-train", encoder=None),
     "cifar100": dict(num_classes=100, img_size=32, latent_channels=3, latent_downsample=1,
-                     out_patch_size=2, fid_ref="cifar100-train"),
+                     patch_size=2, out_patch_size=2, fid_ref="cifar100-train", encoder=None),
 }
 
 

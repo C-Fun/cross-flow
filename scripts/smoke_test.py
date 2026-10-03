@@ -34,8 +34,8 @@ def main():
     y = torch.randint(0, 1000, (bsz,), device=device)
 
     # forward + cross-space JVP loss
-    loss, x_pred, diagonal, loss_cf = model.compute_loss(z, x0, y)
-    print(f"loss={loss.item():.4f} (raw loss_cf={loss_cf.item():.4f})  x_pred={tuple(x_pred.shape)}  "
+    loss, x_pred, diagonal, loss_cf = model.compute_loss(z, x0, y)  # x_pred is the corrected prediction x_hat
+    print(f"loss={loss.item():.4f} (raw loss_cf={loss_cf.item():.4f})  x_hat={tuple(x_pred.shape)}  "
           f"diagonal={diagonal.sum().item()}/{bsz}")
     assert x_pred.shape == x0.shape
 

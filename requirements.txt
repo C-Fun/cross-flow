@@ -8,6 +8,8 @@ diffusers
 opencv-python
 torch-fidelity>=0.3.0
 lpips
+timm
+huggingface_hub
 wandb
 pillow
 numpy

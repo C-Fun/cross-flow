@@ -1,16 +1,19 @@
-"""Precompute SD-VAE latents for ImageNet (unflipped + horizontally flipped).
+"""Precompute frozen-encoder latents for ImageNet (unflipped + horizontally flipped).
 
-Writes a single memory-mapped array `latents.npy` of shape
-    (num_images, 2, 4, latent_size, latent_size)   [float16]
+Writes a single memory-mapped array of shape
+    (num_images, 2, C, latent_size, latent_size)   [float16]
 indexed by the ImageFolder ordering, where [:, 0] is the unflipped latent and
 [:, 1] is the horizontally-flipped latent. Training reloads the matching pixel
 crop on the fly (see utils/data_util.py), so the crop here MUST match
 center_crop_arr.
 
-Launch (single node, 4 GPUs):
-    torchrun --nproc-per-node=4 preprocess_latents.py \
-        --data-dir /path/to/imagenet/train \
-        --output /path/to/latents.npy
+Encoders (utils/vae_util.py):
+  vavae  VA-VAE f16, 32 ch -> 16x16 latents (paper default; official latent stats)
+  sdvae  SD-VAE-ft-mse f8, 4 ch -> 32x32 latents (legacy)
+
+Launch (single node, 8 GPUs):
+    torchrun --nproc-per-node=8 preprocess_latents.py --encoder vavae \
+        --data-dir /path/to/imagenet/train --output /path/to/latents_vavae.npy
 """
 
 import argparse
@@ -23,9 +26,8 @@ from torchvision.datasets import ImageFolder
 import torch
 
 import utils.torch_dist_util as dist
-import utils.torch_util as tu
 from utils.data_util import center_crop_arr, pixel_to_tensor
-from utils.vae_util import VAEEncoder
+from utils.vae_util import build_encoder, ENCODERS
 
 
 def get_args_parser():
@@ -34,7 +36,7 @@ def get_args_parser():
                         help="ImageNet train directory (class subfolders)")
     parser.add_argument("--output", type=str, required=True,
                         help="Output .npy memmap path for the latents")
-    parser.add_argument("--vae-type", type=str, default="mse")
+    parser.add_argument("--encoder", type=str, default="vavae", choices=list(ENCODERS.keys()))
     parser.add_argument("--img-size", type=int, default=256)
     parser.add_argument("--batch-size", type=int, default=64)
     return parser
@@ -49,9 +51,13 @@ def main(args):
     samples = folder.samples
     loader = folder.loader
     num_images = len(samples)
-    latent_size = args.img_size // 8
 
-    dist.print0(f"Found {num_images} images; latent {4}x{latent_size}x{latent_size}")
+    encoder = build_encoder(args.encoder)
+    channels = encoder.latent_channels
+    latent_size = args.img_size // encoder.downsample
+
+    dist.print0(f"Found {num_images} images; encoder={args.encoder} "
+                f"latent {channels}x{latent_size}x{latent_size}")
 
     # rank 0 creates the memmap file, others wait then open it for writing.
     if rank == 0:
@@ -60,12 +66,10 @@ def main(args):
             args.output,
             mode="w+",
             dtype=np.float16,
-            shape=(num_images, 2, 4, latent_size, latent_size),
+            shape=(num_images, 2, channels, latent_size, latent_size),
         )
     dist.barrier()
     latents = open_memmap(args.output, mode="r+")
-
-    encoder = VAEEncoder(vae_type=args.vae_type)
 
     my_indices = list(range(rank, num_images, world_size))
     device = dist.local_device()

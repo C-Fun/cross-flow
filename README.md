@@ -49,21 +49,26 @@ scripts/                Slurm launchers (precompute, self-resubmitting train cha
 - **No DDP wrapper**: `torch.func.jvp` is incompatible with
   `DistributedDataParallel`, so we broadcast params once and manually all-reduce
   gradients (`utils/torch_dist_util.py`).
-- Loss recipe: cross-space L2 residual **+ LPIPS** on the `r = t` reconstruction
-  anchors (`--lpips-weight`). GAN/adversarial loss is not included.
-- **Adaptive per-sample loss normalization** (`--adaptive-p`, default 1.0,
-  MeanFlow-style `1/sg(||R||^2+c)`): keeps the paper's residual/target but
-  equalizes per-sample gradient magnitude. Without it the `r/t^2` factor makes
-  tiny-`t` reconstruction samples dominate every clipped update and the model
-  collapses to a denoiser that ignores `r` (measured on a 230k-step run: FID ~150,
-  samples unchanged from 50k to 230k). `--time-eps` defaults to 1e-2.
-  `scripts/diag_collapse.py` reproduces the diagnosis on any checkpoint.
+- Loss recipe (paper Sec 3.3 / App B.4, minus GAN): **L1** on the eq. (11) residual
+  (`--pixel-loss l1`; keeps the paper's `r/t^2` weighting with a bounded gradient)
+  **+ DINOv3-B Huber perceptual loss** on the reconstruction-compatible prediction
+  `F + t(t-r)/r * sg(dF/dt)` for **all** `(t, r)` samples, without the `r/t^2`
+  weight (`--perc-net dinov3`, `--perc-weight`). GAN/adversarial loss is not
+  included yet. `--adaptive-p` (MeanFlow-style normalization) and `--pixel-loss
+  l2` remain as ablations: with L2 the `r/t^2` factor squares into a 1e4x
+  gradient imbalance and the model collapses to a denoiser (230k-step run, FID
+  ~150); `scripts/diag_collapse.py` reproduces that diagnosis.
+- **Encoder**: `--dataset imagenet_vavae` uses the paper's VA-VAE (f16, 32 ch,
+  official latent stats; vendored loader in `utils/vavae_autoencoder.py`),
+  `--dataset imagenet` the legacy 4-ch SD-VAE.
+- **Schedule** (paper Table 3): batch 2048 via `--grad-accum`, `--epochs 160`,
+  `--warmup-epochs 5`, wd 1e-6, no label dropout. AdamW 3e-4 stands in for Muon 8e-4.
 
 ## Usage
 
 Install deps (ROCm PyTorch): `pip install -r requirements.txt`.
 
-**1. Precompute latents** (one time):
+**1. Precompute latents** (one time; `--encoder vavae|sdvae`):
 
 ```bash
 sbatch scripts/precompute_latents.sh   # edit DATA_DIR / OUTPUT first

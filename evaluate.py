@@ -223,6 +223,7 @@ def main(args):
         latent_channels=cfg["latent_channels"],
         num_classes=args.num_classes,
         out_patch_size=cfg["out_patch_size"],
+        patch_size=cfg["patch_size"],
     )
 
     if not os.path.isfile(args.ckpt_path):
