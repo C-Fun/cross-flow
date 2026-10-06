@@ -69,6 +69,11 @@ def get_args_parser():
     parser.add_argument("--grad-accum", type=int, default=1,
                         help="Gradient accumulation steps per optimizer step")
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "muon"],
+                        help="muon (paper default): torch.optim.Muon on 2-D transformer weight "
+                             "matrices, AdamW on everything else (tokens, norms, biases, embeds)")
+    parser.add_argument("--aux-lr", type=float, default=None,
+                        help="AdamW lr for the non-matrix params when --optimizer muon (default: --lr)")
     parser.add_argument("--warmup-steps", type=int, default=0,
                         help="Linear LR warmup steps (constant afterwards)")
     parser.add_argument("--warmup-epochs", type=float, default=0.0,
@@ -95,6 +100,9 @@ def get_args_parser():
                         help="Perceptual loss backbone on the corrected prediction (paper: DINOv3-B + Huber)")
     parser.add_argument("--perc-weight", type=float, default=1.0,
                         help="Weight of the perceptual loss (applied to all (t, r) samples)")
+    parser.add_argument("--perc-clamp", type=int, default=1,
+                        help="Clamp the corrected prediction x_hat to [-1, 1] before the perceptual "
+                             "net (guards against the unbounded t(t-r)/r bootstrap coefficient)")
     parser.add_argument("--dtype", type=str, default="fp32", choices=["fp32", "bf16"],
                         help="bf16 wraps the forward/JVP in autocast (experimental)")
 
@@ -131,6 +139,70 @@ def infinite_loader(loader, sampler):
         for batch in loader:
             yield batch
         epoch += 1
+
+
+class MuonAdamW:
+    """Muon for the 2-D weight matrices inside the transformer blocks, AdamW for the rest.
+
+    Both ranks run identical optimizers on identical all-reduced gradients, so no
+    sharding/DDP integration is needed. Exposes the subset of the optimizer API the
+    training loop uses; param groups carry a `base_lr` for the warmup schedule.
+    """
+
+    def __init__(self, model, lr, aux_lr, weight_decay, betas):
+        muon_params, aux_params = [], []
+        for name, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
+            (muon_params if (p.ndim == 2 and ".blocks." in name) else aux_params).append(p)
+        self.muon = torch.optim.Muon(
+            muon_params, lr=lr, weight_decay=weight_decay, momentum=0.95, nesterov=True,
+            adjust_lr_fn="match_rms_adamw",
+        )
+        self.adamw = torch.optim.AdamW(aux_params, lr=aux_lr, betas=betas, weight_decay=weight_decay)
+        for g in self.muon.param_groups:
+            g["base_lr"] = lr
+        for g in self.adamw.param_groups:
+            g["base_lr"] = aux_lr
+        n_m = sum(p.numel() for p in muon_params); n_a = sum(p.numel() for p in aux_params)
+        dist.print0(f"Muon on {len(muon_params)} matrices ({n_m/1e6:.1f}M params), "
+                    f"AdamW on {len(aux_params)} tensors ({n_a/1e6:.1f}M params)")
+
+    @property
+    def param_groups(self):
+        return self.muon.param_groups + self.adamw.param_groups
+
+    @property
+    def state(self):
+        return {**self.muon.state, **self.adamw.state}
+
+    def zero_grad(self, set_to_none=True):
+        self.muon.zero_grad(set_to_none=set_to_none)
+        self.adamw.zero_grad(set_to_none=set_to_none)
+
+    def step(self):
+        self.muon.step()
+        self.adamw.step()
+
+    def state_dict(self):
+        return {"muon": self.muon.state_dict(), "adamw": self.adamw.state_dict()}
+
+    def load_state_dict(self, sd):
+        self.muon.load_state_dict(sd["muon"])
+        self.adamw.load_state_dict(sd["adamw"])
+
+
+def build_optimizer(model, args):
+    if args.optimizer == "muon":
+        aux_lr = args.aux_lr if args.aux_lr is not None else args.lr
+        return MuonAdamW(model, args.lr, aux_lr, args.weight_decay, (args.beta1, args.beta2))
+    opt = torch.optim.AdamW(
+        model.parameters(), lr=args.lr, betas=(args.beta1, args.beta2),
+        weight_decay=args.weight_decay,
+    )
+    for g in opt.param_groups:
+        g["base_lr"] = args.lr
+    return opt
 
 
 def save_checkpoint(path, model, ema, opt, step, args):
@@ -232,12 +304,7 @@ def main(args):
     dist.broadcast_parameters(model)
 
     ema = EMA(model, decay=args.ema_decay)
-    opt = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.lr,
-        betas=(args.beta1, args.beta2),
-        weight_decay=args.weight_decay,
-    )
+    opt = build_optimizer(model, args)
 
     perc_fn = None
     if args.perc_weight > 0 and args.perc_net != "none":
@@ -327,10 +394,11 @@ def main(args):
     t0 = time.time()
 
     for step in range(start_step, args.total_steps):
-        # linear LR warmup, constant afterwards
-        lr_now = args.lr * min(1.0, (step + 1) / args.warmup_steps) if args.warmup_steps > 0 else args.lr
+        # linear LR warmup, constant afterwards (per-group base_lr: Muon vs aux AdamW)
+        warm = min(1.0, (step + 1) / args.warmup_steps) if args.warmup_steps > 0 else 1.0
         for group in opt.param_groups:
-            group["lr"] = lr_now
+            group["lr"] = group["base_lr"] * warm
+        lr_now = args.lr * warm
 
         opt.zero_grad(set_to_none=True)
         step_loss_cf = 0.0
@@ -353,7 +421,8 @@ def main(args):
                 # ALL (t, r) samples, no r/t^2 weight (paper App. B.4)
                 perc_loss = torch.zeros((), device=device)
                 if perc_fn is not None:
-                    perc_loss = perc_fn(x_hat, x0)
+                    perc_in = x_hat.clamp(-1, 1) if args.perc_clamp else x_hat
+                    perc_loss = perc_fn(perc_in, x0)
                 loss = (loss_main + args.perc_weight * perc_loss) / args.grad_accum
 
             loss.backward()

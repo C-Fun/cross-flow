@@ -20,7 +20,7 @@ LATENTS_PATH=${LATENTS_PATH:-/mnt/data0/fxc293/imagenet-latents/latents_${ENCODE
 GPUS=${GPUS:-0,1,2,3,4,5,6,7}
 TMUX_SESSION=${TMUX_SESSION:-crossflow}
 TRAIN_WINDOW=${TRAIN_WINDOW:-train}
-TRAIN_LOG=${TRAIN_LOG:-/mnt/data0/fxc293/runs/crossflow_B_v4_vavae_train.log}
+TRAIN_LOG=${TRAIN_LOG:-/mnt/data0/fxc293/runs/crossflow_B_v5_muon_train.log}
 
 set +u
 source "$HOME/miniconda3/etc/profile.d/conda.sh"

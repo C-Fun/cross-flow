@@ -20,14 +20,19 @@ CONDA_ENV=${CONDA_ENV:-crossflow}
 DATASET=${DATASET:-imagenet_vavae}                                  # imagenet_vavae | imagenet | cifar10 | cifar100
 DATA_DIR=${DATA_DIR:-/mnt/data0/datasets/imagenet/train}
 LATENTS_PATH=${LATENTS_PATH:-/mnt/data0/fxc293/imagenet-latents/latents_vavae.npy}   # imagenet only
-WORKDIR=${WORKDIR:-/mnt/data0/fxc293/runs/crossflow_B_v4_vavae}
+WORKDIR=${WORKDIR:-/mnt/data0/fxc293/runs/crossflow_B_v5_muon}
 MODEL=${MODEL:-crossflowDiT_B_2}
 # paper schedule (Table 3): batch 2048, 160 epochs, 5 warmup epochs. 2048 = 8 GPUs x 64 x 4 accum.
 GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-2048}
 GRAD_ACCUM=${GRAD_ACCUM:-4}
 EPOCHS=${EPOCHS:-160}
-LR=${LR:-3e-4}                                                      # AdamW; paper uses Muon 8e-4
+OPTIMIZER=${OPTIMIZER:-muon}                                        # paper: Muon
+LR=${LR:-8e-4}                                                      # paper: Muon lr 8e-4
+AUX_LR=${AUX_LR:-3e-4}                                              # AdamW lr for tokens/norms/embeds
 WARMUP_EPOCHS=${WARMUP_EPOCHS:-5}
+TIME_EPS=${TIME_EPS:-0.05}                                          # paper: "mild endpoint clipping" (value unstated)
+GRAD_CLIP=${GRAD_CLIP:-0}                                           # Muon updates are scale-normalized; no clipping
+PERC_CLAMP=${PERC_CLAMP:-1}
 PERC_NET=${PERC_NET:-dinov3}
 PERC_WEIGHT=${PERC_WEIGHT:-1.0}
 GPUS=${GPUS:-0,1,2,3,4,5,6,7}
@@ -79,8 +84,13 @@ while [ ! -f "${WORKDIR}/DONE" ]; do
         --global-batch-size "${GLOBAL_BATCH_SIZE}" \
         --grad-accum "${GRAD_ACCUM}" \
         --epochs "${EPOCHS}" \
+        --optimizer "${OPTIMIZER}" \
         --lr "${LR}" \
+        --aux-lr "${AUX_LR}" \
         --warmup-epochs "${WARMUP_EPOCHS}" \
+        --time-eps "${TIME_EPS}" \
+        --grad-clip "${GRAD_CLIP}" \
+        --perc-clamp "${PERC_CLAMP}" \
         --weight-decay 1e-6 \
         --p-uncond 0 \
         --pixel-loss l1 \
