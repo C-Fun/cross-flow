@@ -43,10 +43,18 @@ echo "##### [2/2] latents -> ${LATENTS_PATH}  ($(date))"
 if [ -f "${LATENTS_PATH}.DONE" ]; then
     echo "latents already computed"
 else
+    # Write the 42 GB memmap on node-local NVMe, then copy to Lustre. On GH200 a
+    # multi-GB Lustre mmap inside CUDA processes aborts with a glibc double free
+    # (reproduced; local disk is fine), so never memmap large files on /work there.
+    LOCAL_TMP=/tmp/$USER/latents; mkdir -p "$LOCAL_TMP"
     torchrun --standalone --nnodes=1 --nproc-per-node=4 preprocess_latents.py \
-        --encoder vavae --data-dir "${DATA_DIR}" --output "${LATENTS_PATH}" \
+        --encoder vavae --data-dir "${DATA_DIR}" --output "$LOCAL_TMP/latents.npy" \
         --img-size 256 --batch-size 128 \
-        && touch "${LATENTS_PATH}.DONE" || { echo "PRECOMPUTE FAILED"; exit 1; }
+        || { echo "PRECOMPUTE FAILED"; exit 1; }
+    rm -f "${LATENTS_PATH}"
+    cp "$LOCAL_TMP/latents.npy" "${LATENTS_PATH}" && touch "${LATENTS_PATH}.DONE" \
+        || { echo "COPY FAILED"; exit 1; }
+    rm -rf "$LOCAL_TMP"
 fi
 python -c "import numpy as np; a=np.load('${LATENTS_PATH}', mmap_mode='r'); print('latents', a.shape, a.dtype)"
 

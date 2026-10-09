@@ -73,8 +73,16 @@ sbatch --job-name="${SLURM_JOB_NAME}" --dependency=afterany:"${SLURM_JOB_ID}" "$
 echo "=== Job ${SLURM_JOB_ID} (restart ${COUNT}) on $(hostname) $(date) ==="
 nvidia-smi --query-gpu=index,name,memory.used,memory.total --format=csv,noheader || true
 
+# Stage the latents memmap on node-local NVMe: a multi-GB Lustre mmap inside CUDA
+# processes aborts (glibc double free) on GH200. ~42 GB copy, a few minutes.
+LOCAL_LATENTS=/tmp/$USER/latents_$(basename "${LATENTS_PATH}")
+mkdir -p "$(dirname "$LOCAL_LATENTS")"
+if [ ! -f "$LOCAL_LATENTS" ] || [ "$(stat -c %s "$LOCAL_LATENTS")" != "$(stat -c %s "${LATENTS_PATH}")" ]; then
+    echo "staging latents to $LOCAL_LATENTS ($(date))"; cp "${LATENTS_PATH}" "$LOCAL_LATENTS"; echo "staged ($(date))"
+fi
+
 torchrun --standalone --nnodes=1 --nproc-per-node=4 train.py \
-    --dataset "${DATASET}" --data-dir "${DATA_DIR}" --latents-path "${LATENTS_PATH}" \
+    --dataset "${DATASET}" --data-dir "${DATA_DIR}" --latents-path "$LOCAL_LATENTS" \
     --workdir "${WORKDIR}" \
     --model "${MODEL}" \
     --global-batch-size "${GLOBAL_BATCH_SIZE}" \
