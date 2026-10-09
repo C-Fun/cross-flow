@@ -51,6 +51,12 @@ source $B/miniforge3/etc/profile.d/conda.sh
 conda activate crossflow
 set -u
 export TORCH_HOME=$B/.cache/torch HF_HOME=$B/.cache/hf
+# DeltaAI injects NCCL_NET_PLUGIN=aws-ofi-nccl (Slingshot/libfabric CXI) into every job.
+# In a plain batch step (no srun) that plugin aborts with a glibc double free on the first
+# collective; it only works inside srun job steps. We are single-node (NVLink P2P), so the
+# inter-node net plugin is not needed at all: use the plain socket net for bootstrap.
+export NCCL_NET=Socket
+unset NCCL_NET_PLUGIN
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export OMP_NUM_THREADS=8
 export PYTHONPATH="${REPO_DIR}"
